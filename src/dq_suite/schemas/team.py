@@ -2,7 +2,7 @@ from pyspark.sql.types import StructType
 
 SCHEMA = (
     StructType()
-    .add("bronDatasetId", "string")
-    .add("medaillonLaag", "string")
     .add("teamId", "string")
+    .add("teamNaam", "string")
+    .add("teamDescription", "string")
 )

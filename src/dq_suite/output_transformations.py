@@ -1,7 +1,7 @@
 import copy
 import datetime
 from typing import Any, Dict, List
-
+import logging
 from great_expectations.checkpoint.checkpoint import (
     CheckpointDescriptionDict,
     CheckpointResult,
@@ -9,6 +9,7 @@ from great_expectations.checkpoint.checkpoint import (
 from pyspark.sql import DataFrame, Row, SparkSession
 from pyspark.sql.functions import col, lit, xxhash64
 from pyspark.sql.types import StructType
+import humps
 
 from .common import (
     DataQualityRulesDict,
@@ -26,9 +27,11 @@ from .schemas.bronattribuut import SCHEMA as BRONATTRIBUUT_SCHEMA
 from .schemas.brondataset import SCHEMA as BRONDATASET_SCHEMA
 from .schemas.brontabel import SCHEMA as BRONTABEL_SCHEMA
 from .schemas.regel import SCHEMA as REGEL_SCHEMA
+from .schemas.team import SCHEMA as TEAM_SCHEMA
 from .schemas.validatie import SCHEMA as VALIDATIE_SCHEMA
 from .schemas.regel_id_input import SCHEMA as REGEL_ID_INPUT_SCHEMA
-
+logger = logging.getLogger("dq_suite.output_transformations")
+logger.setLevel(logging.INFO)
 
 def create_empty_dataframe(
     spark_session: SparkSession, schema: StructType
@@ -78,7 +81,6 @@ def add_regel_id_column(
             f"Cannot compute hash: 'bronTabelId' not found in "
             f"columns: {df.columns}"
         )
-
     df_with_id = df.withColumn(
         "regelId",
         xxhash64(
@@ -183,18 +185,33 @@ def get_brondataset_data(dq_rules_dict: DataQualityRulesDict) -> list[dict]:
         {
             "bronDatasetId": dataset_dict["name"],
             "medaillonLaag": dataset_dict["layer"],
+            "teamId": dq_rules_dict["team"]["teamid"]
         }
     ]
 
+def get_team_data(dq_rules_dict: DataQualityRulesDict) -> list[dict]:
+    """
+    Get the team data from the dq_rules_dict.
+    """
+    dataset_dict: DatasetDict = dq_rules_dict["team"]
+    return [
+        {
+            "teamId": dataset_dict["teamid"],
+            "teamName": dataset_dict["teamname"],
+            "teamDescription": dataset_dict["teamdescription"],
+        }
+    ]
 
 def get_single_brontabel_dict(dataset_name: str, rules_dict: RulesDict) -> dict:
     table_name = rules_dict["table_name"]
     unique_identifier = rules_dict["unique_identifier"]
     table_id = f"{dataset_name}_{table_name}"
+    bronDatasetId = f"{dataset_name}"
     return {
         "bronTabelId": table_id,
         "tabelNaam": table_name,
         "uniekeSleutel": unique_identifier,
+        "bronDatasetId": bronDatasetId
     }
 
 
@@ -252,7 +269,7 @@ def get_bronattribuut_data(
     return extracted_data
 
 
-def get_single_rule_dict(rule: Rule, table_id: str) -> dict:
+def get_single_rule_dict(rule: Rule, table_id: str, teamid: str) -> dict:
     parameters = copy.deepcopy(rule["parameters"])
 
     # Round min/max values (if present) to a single decimal
@@ -263,13 +280,13 @@ def get_single_rule_dict(rule: Rule, table_id: str) -> dict:
     if "max_value" in parameters.keys():
         max_value = float(parameters["max_value"])
         parameters["max_value"] = round(max_value, 1)
-
     return {
         "regelNaam": rule["rule_name"],
         "regelParameters": parameters,
         "norm": rule.get("norm", None),
         "bronTabelId": table_id,
         "attribuut": parameters.get("column", None),
+        "teamId": teamid
     }
 
 
@@ -279,11 +296,12 @@ def get_regel_data(dq_rules_dict: DataQualityRulesDict) -> list[dict]:
     """
     extracted_data = []
     dataset_name = dq_rules_dict["dataset"]["name"]
+    teamid = dq_rules_dict["team"]["teamid"]
     for table in dq_rules_dict["tables"]:
         table_id = f"{dataset_name}_{table['table_name']}"
         for rule in table["rules"]:
             extracted_data.append(
-                get_single_rule_dict(rule=rule, table_id=table_id)
+                get_single_rule_dict(rule=rule, table_id=table_id,teamid=teamid)
             )
     return extracted_data
 
@@ -316,7 +334,7 @@ def get_single_validation_result_dict(
         "dqDatum": run_time,
         # TODO/check: rename dqDatum, discuss all field names
         "dqResultaat": validation_result,
-        "regelNaam": expectation_result["expectation_type"],
+        "regelNaam": humps.pascalize(expectation_result["expectation_type"]),
         "regelParameters": validation_parameters,
         "bronTabelId": table_id,
     }
@@ -337,7 +355,6 @@ def get_validatie_data(
         f"{validation_settings_obj.dataset_name}_"
         f"{validation_settings_obj.table_name}"
     )
-
     extracted_data = []
     for result in validation_results:
         for expectation_result in result["expectations"]:
@@ -359,7 +376,7 @@ def get_single_expectation_afwijking_data(
     table_id: str,
 ) -> list[dict]:
     extracted_data = []
-    expectation_type = expectation_result["expectation_type"]
+    expectation_type = humps.pascalize(expectation_result["expectation_type"])
     parameter_list = get_parameters_from_results(result=expectation_result)
     attribute = get_target_attr_for_rule(result=expectation_result)
     deviating_attribute_value = expectation_result["result"].get(
@@ -409,13 +426,11 @@ def get_afwijking_data(
         f"{validation_settings_obj.table_name}"
     )
     unique_identifier = validation_settings_obj.unique_identifier
-
     extracted_data = []
     if not isinstance(
         unique_identifier, list
     ):  # TODO/check: is this always a list[str]?
         unique_identifier = [unique_identifier]
-
     for result in validation_results:
         for expectation_result in result["expectations"]:
             extracted_data += get_single_expectation_afwijking_data(
@@ -425,6 +440,7 @@ def get_afwijking_data(
                 run_time=run_time,
                 table_id=table_id,
             )
+
     return extracted_data
 
 
@@ -445,6 +461,9 @@ def create_metadata_dataframe(
     elif metadata_table_name == "regel":
         extracted_data = get_regel_data(dq_rules_dict=dq_rules_dict)
         schema = REGEL_SCHEMA
+    elif metadata_table_name == "team":
+        extracted_data = get_team_data(dq_rules_dict=dq_rules_dict)
+        schema = TEAM_SCHEMA
     else:
         raise ValueError(f"Unknown metadata table name '{metadata_table_name}'")
 
@@ -453,7 +472,6 @@ def create_metadata_dataframe(
         spark_session=spark_session,
         schema=schema,
     )
-
     if metadata_table_name == "regel":
         return add_regel_id_column(
             df=df,
@@ -470,6 +488,7 @@ def write_validation_metadata_tables(
         "brontabel",
         "bronattribuut",
         "regel",
+        "team"
     ]
 
     for metadata_table_name in metadata_table_names:
@@ -495,7 +514,6 @@ def create_validation_result_dataframe(
 ) -> DataFrame:
     validation_output = checkpoint_result.describe_dict()
     run_time = checkpoint_result.run_id.run_time
-
     if validation_table_name == "validatie":
         extracted_data = get_validatie_data(
             validation_settings_obj=validation_settings_obj,
@@ -511,12 +529,12 @@ def create_validation_result_dataframe(
             validation_output=validation_output,
         )
         schema = AFWIJKING_SCHEMA
+
     else:
         raise ValueError(
             f"Unknown validation result table name '"
             f"{validation_table_name}'"
         )
-
     # StructType doesn't support .drop(), so use a workaround
     reduced_schema = StructType()
     for structfield in schema:
@@ -532,7 +550,6 @@ def create_validation_result_dataframe(
         spark_session=validation_settings_obj.spark_session,
         schema=reduced_schema,
     )  # Note: regelId is added below
-
     df = add_regel_id_column(df=df)
     return enforce_column_order(df=df, schema=schema)
 

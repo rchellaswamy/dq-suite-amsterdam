@@ -198,6 +198,7 @@ def merge_df_with_unity_table(
         merge_dict = {
             "bronDatasetId": f"{df_new_alias}.bronDatasetId",
             "medaillonLaag": f"{df_new_alias}.medaillonLaag",
+            "teamId": f"{df_new_alias}.teamId",
         }
         merge_on = "bronDatasetId"
     elif table_name == "brontabel":
@@ -205,6 +206,7 @@ def merge_df_with_unity_table(
             "bronTabelId": f"{df_new_alias}.bronTabelId",
             "tabelNaam": f"{df_new_alias}.tabelNaam",
             "uniekeSleutel": f"{df_new_alias}.uniekeSleutel",
+            "bronDatasetId": f"{df_new_alias}.bronDatasetId",
         }
         merge_on = "bronTabelId"
     elif table_name == "bronattribuut":
@@ -222,8 +224,16 @@ def merge_df_with_unity_table(
             "norm": f"{df_new_alias}.norm",
             "bronTabelId": f"{df_new_alias}.bronTabelId",
             "attribuut": f"{df_new_alias}.attribuut",
+            "teamId": f"{df_new_alias}.teamId"
         }
         merge_on = "regelId"
+    elif table_name == "team":
+        merge_dict = {
+            "teamId": f"{df_new_alias}.teamId",
+            "teamname": f"{df_new_alias}.teamNaam",
+            "teamdescription": f"{df_new_alias}.teamdescription"
+        }
+        merge_on = "teamId"
     else:
         raise ValueError(f"Unknown metadata table name '{table_name}'")
 
@@ -281,6 +291,7 @@ class ValidationSettings:
     slack_webhook: str | None = None
     ms_teams_webhook: str | None = None
     notify_on: Literal["all", "success", "failure"] = "failure"
+    teamid: str | None = None
 
     def __post_init__(self):
         if not isinstance(self.spark_session, SparkSession):
@@ -313,6 +324,9 @@ class ValidationSettings:
             raise ValueError(
                 "'notify_on' should be equal to 'all', 'success' or 'failure'"
             )
+        if not isinstance(self.teamid, str):
+            if self.teamid is not None:
+                raise TypeError("'teamid' should be of type str")
         self._initialise_or_update_name_parameters()
 
     def _initialise_or_update_name_parameters(self):

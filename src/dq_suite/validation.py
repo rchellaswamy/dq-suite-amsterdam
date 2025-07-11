@@ -1,3 +1,4 @@
+import logging
 import copy
 from typing import Any, Dict, List, Literal, Tuple
 
@@ -33,6 +34,14 @@ from .validation_input import (
     validate_data_quality_rules_dict,
 )
 
+# Configure logger to log to stdout
+logger = logging.getLogger("dq_suite.validation")
+logger.setLevel(logging.INFO)
+handler = logging.StreamHandler()
+formatter = logging.Formatter('[%(asctime)s] %(levelname)s %(name)s: %(message)s')
+handler.setFormatter(formatter)
+if not logger.hasHandlers():
+    logger.addHandler(handler)
 
 class ValidationRunner:
     def __init__(
@@ -294,8 +303,7 @@ def validate(
     )
     validation_runner_obj.create_batch_definition()
     validation_runner_obj.create_validation_definition()
-
-    print("***Starting validation run***")
+    logger.info("***Starting validation run ***")
     return validation_runner_obj.run_validation(
         batch_parameters={"dataframe": df}
     )
@@ -345,7 +353,11 @@ def run_validation(
         # TODO/check: we can have df.table_name !=
         #  table_name: is this wrong?
         df.table_name = table_name
-
+    logger.info(
+        "Running validation: json_path=%s, table_name=%s, validation_name=%s, batch_name=%s",
+        json_path, table_name, validation_name, batch_name
+    )
+    logger.info ("Extract dq rules")
     # 1) extract the data quality rules to be applied...
     validation_dict = get_data_quality_rules_dict(file_path=json_path)
     validate_data_quality_rules_dict(data_quality_rules_dict=validation_dict)
@@ -357,14 +369,15 @@ def run_validation(
     dataset_layer = dataset_dict["layer"]
     dataset_name = dataset_dict["name"]
     unique_identifier = rules_dict["unique_identifier"]
-
+    teamid = validation_dict["team"]["teamid"]
+    logger.info("rules dictionary: %s", rules_dict)
     if rules_dict is None:
         raise ValueError(
             f"No validations found for table_name "
             f"'{table_name}' in JSON file at '"
             f"{json_path}'."
         )
-
+    logger.info ("Perform the validation on DF ")
     # 2) ... perform the validation on the dataframe...
     validation_settings_obj = ValidationSettings(
         spark_session=spark_session,
@@ -379,6 +392,7 @@ def run_validation(
         slack_webhook=slack_webhook,
         ms_teams_webhook=ms_teams_webhook,
         notify_on=notify_on,
+        teamid=teamid
     )
 
     checkpoint_result = validate(
@@ -386,17 +400,17 @@ def run_validation(
         rules_dict=rules_dict,
         validation_settings_obj=validation_settings_obj,
     )
-
     if debug_mode:  # Don't write to UC in debug mode
         return checkpoint_result.success, checkpoint_result
 
     # 3) ... and write results to unity catalog
     if write_results_to_unity_catalog:
+        logger.info ("Write results in unity catalog dimension tables")
         write_validation_metadata_tables(
             dq_rules_dict=validation_dict,
             validation_settings_obj=validation_settings_obj,
         )
-
+        logger.info ("Write results in unity catalog fact tables")
         write_validation_result_tables(
             df=df,
             checkpoint_result=checkpoint_result,

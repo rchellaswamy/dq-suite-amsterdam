@@ -7,7 +7,6 @@ import validators
 
 from .common import DataQualityRulesDict, RulesDict
 
-
 def read_data_quality_rules_from_json(file_path: str) -> str:
     if not isinstance(file_path, str):
         raise TypeError(f"{file_path} should be of type 'str'")
@@ -33,6 +32,7 @@ def validate_data_quality_rules_dict(
     if not isinstance(data_quality_rules_dict, dict):
         raise TypeError("'data_quality_rules_dict' should be of type 'dict'")
 
+    validate_team(data_quality_rules_dict=data_quality_rules_dict)    
     validate_dataset(data_quality_rules_dict=data_quality_rules_dict)
     validate_tables(data_quality_rules_dict=data_quality_rules_dict)
 
@@ -167,3 +167,46 @@ def filter_validation_dict_by_table_name(
             # Only one RulesDict per table expected, so return the first match
             return rules_dict
     return None
+
+def get_team_from_rules_dict(data_quality_rules_dict: dict) -> dict | None:
+    """
+    Extracts the team information from the data quality rules dict if present.
+    Returns a dict with teamid, teamName, and teamDescription, or None if not found.
+    """
+    team_info = data_quality_rules_dict.get("team")
+    if team_info is None:
+        return None
+    required_keys = {"teamid", "teamName"}
+    if not all(k in team_info for k in required_keys):
+        raise KeyError("Team info must contain 'teamid' and 'teamName'")
+    return {
+        "teamid": team_info["teamid"],
+        "teamname": team_info["teamname"],
+        "teamdescription": team_info.get("teamdescription", None)
+    }
+
+def validate_team(data_quality_rules_dict: dict) -> None:
+    if "team" not in data_quality_rules_dict:
+        raise KeyError("No 'team' key found in data_quality_rules_dict")
+
+    if not isinstance(data_quality_rules_dict["team"], dict):
+        raise TypeError("'team' should be of type 'dict'")
+
+    if "teamid" not in data_quality_rules_dict["team"]:
+        raise KeyError(
+            "No 'teamid' key found in data_quality_rules_dict['team']"
+        )
+    if "teamname" not in data_quality_rules_dict["team"]:
+        raise KeyError(
+            "No 'teamname' key found in data_quality_rules_dict['team']"
+        )
+    if "teamdescription" not in data_quality_rules_dict["team"]:
+        raise KeyError(
+            "No 'teamdescription' key found in data_quality_rules_dict['team']"
+        )
+    if not isinstance(data_quality_rules_dict["team"]["teamid"], str):
+        raise TypeError("Dataset 'teamid' should be of type 'str'")
+    if not isinstance(data_quality_rules_dict["team"]["teamname"], str):
+        raise TypeError("Dataset 'teamname' should be of type 'str'")
+    if not isinstance(data_quality_rules_dict["team"]["teamdescription"], str):
+        raise TypeError("Dataset 'teamdescription' should be of type 'str'")
